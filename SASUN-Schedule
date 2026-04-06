@@ -1,0 +1,350 @@
+// ==UserScript==
+// @name         SASUN 批次班表
+// @namespace    http://tampermonkey.net/
+// @version      3.9
+// @description
+// @match        https://sasun.in/admin/schedule*
+// @grant        none
+// ==/UserScript==
+
+(function() {
+'use strict';
+
+window.alert = function() {};
+window.confirm = function() { return true; };
+new MutationObserver(() => {
+    document.querySelectorAll('button').forEach(btn => {
+        let text = btn.textContent.trim();
+        if(/確定|知道|關閉|OK|好|Yes|关闭/i.test(text) && btn.offsetParent !== null) {
+            btn.click();
+        }
+    });
+}).observe(document.body, { childList: true, subtree: true });
+
+const AGENCIES = [
+    "仙境", "鑽石", "曼哈頓", "加多寶", "森友會", "尊爵", "帕加尼", "萬豪", "凱卉", "紀梵希", "維多利亞", "順成", "耐奇", "南亞", "天下", "六六六", "愛瑪馬", "夏慕尼", "香奈兒", "焦點", "皇冠", "紫羅蘭", "熊貓", "巴黎世家", "三分春色", "義美", "好事多", "寶島", "桂花園", "浪琴", "台中處女座", "台中時光", "台南嘉年華"
+];
+
+function insertBatchButton() {
+    if (document.getElementById('batchInputBtnX')) return;
+    const btn = document.createElement('button');
+    btn.id = 'batchInputBtnX';
+    btn.textContent = '批次輸入班表';
+    btn.style = 'margin-left:16px; padding:5px 16px; background:#19ac5d; color:#fff; border:none; border-radius:5px; font-size:16px; cursor:pointer;';
+    const h1 = document.querySelector('h1');
+    if(h1 && h1.parentNode) h1.after(btn);
+    btn.addEventListener('click', showDialog);
+}
+
+function showDialog() {
+    if(document.getElementById('batchInputDialogX')) return;
+    const dialog = document.createElement('div');
+    dialog.id = 'batchInputDialogX';
+    dialog.style = `
+        position:fixed; z-index:99999; top:14vh; left:50vw; transform:translate(-50%,0);
+        background:#fff; border:2px solid #19ac5d; border-radius:10px; padding:28px 28px 20px 28px;
+        min-width:420px; width:420px; max-width:90vw;
+        box-shadow:0 6px 32px #19ac5d49;
+        user-select:none;
+    `;
+    dialog.innerHTML = `
+      <div id="dragBarX" style="cursor:move;font-size:17px;font-weight:600;letter-spacing:2px;color:#19ac5d;height:32px; margin:-16px -5px 16px -18px; padding:5px 8px 5px 8px; background:linear-gradient(90deg,#e5ffe8 70%,#fff 100%); border-radius:8px 8px 0 0;">
+        SASUN 批次輸入班表
+        <span style="float:right;font-size:22px;cursor:pointer;color:#999;" id="batchDlgCloseBtnX">&times;</span>
+      </div>
+      <div style="margin-bottom:9px;">
+        <b>經紀公司：</b>
+        <div id="agency-search-wrap" style="position:relative; display:inline-block; width:308px;vertical-align:top;">
+          <input id="agencySearchInput" type="text" placeholder="輸入公司關鍵字" autocomplete="off"
+             style="width:268px; padding:4px 9px; border:1px solid #bbb; border-radius:5px;font-size:16px;" />
+          <ul id="agency-suggest" style="position:absolute; left:0; top:120%; background:#fff; border:1px solid #bbb; border-radius:4px; margin:3px 0 0 0; padding:0; list-style:none; display:none; z-index:30; max-height:220px; overflow-y:auto; width:100%;box-shadow:0 3px 16px #eee;"></ul>
+        </div>
+        <br>
+        <span id="agencySearchSelected" style="color:#19ac5d; margin-left:0;margin-top:3px;display:inline-block"></span>
+      </div>
+      <div style="margin:13px 0 3px 0;">
+       <span>貼上完整表格，包括表頭（僅處理「|」開頭行，且自動排除| 名稱、|---）：</span>
+      </div>
+      <textarea id="batchDataX" style="width:99%;height:228px;resize:vertical;font-size:15px;padding:5px 1px 2px 2px;border-radius:6px;border:1px solid #ccc;"></textarea>
+      <div style="margin-top:16px;">
+        <button id="batchStartBtnX" style="margin-right:17px;padding:7px 18px;background:#19ac5d;color:#fff;border:none;border-radius:5px;font-size:16px;">
+            開始批次</button>
+        <button style="padding:7px 16px;font-size:16px;border-radius:5px;background:#41cd6a;color:#fff;border:none;" onclick="document.getElementById('batchInputDialogX').remove()">取消</button>
+      </div>
+      <div id="batchResultLogX" style="margin-top:14px;font-size:15px;min-height:38px;color:#b03;user-select:text;cursor:text;"></div>
+      <div style="margin-top:8px;color:#888;font-size:13px;">
+        單筆間隔：<span id="batchIntervalInfo">100ms</span> &nbsp;
+        <span style="font-size:10px;">（可拖曳視窗標題移動）</span>
+      </div>
+    `;
+    document.body.appendChild(dialog);
+
+    makeDialogDraggable(dialog, dialog.querySelector('#dragBarX'));
+    dialog.querySelector('#batchDlgCloseBtnX').onclick = ()=>dialog.remove();
+
+    const input = dialog.querySelector("#agencySearchInput");
+    const suggest = dialog.querySelector("#agency-suggest");
+    const showSelected = dialog.querySelector("#agencySearchSelected");
+    let selectedAgency = "";
+    let filtered = [...AGENCIES];
+
+    function renderSuggest(val) {
+        filtered = AGENCIES.filter(a => a.toLowerCase().includes(val.toLowerCase()));
+        suggest.innerHTML = filtered.map(a => `<li style="padding:3px 12px;cursor:pointer;">${a}</li>`).join('');
+        suggest.style.display = filtered.length ? "block" : "none";
+    }
+    input.addEventListener("input", function(){ renderSuggest(this.value.trim()); });
+    input.addEventListener("focus", function(){ renderSuggest(this.value.trim()); });
+    input.addEventListener("blur", function(){ setTimeout(()=>{suggest.style.display="none"}, 130); });
+    suggest.addEventListener("mousedown", function(e){
+        if(e.target.tagName==="LI"){
+            input.value = e.target.textContent.trim();
+            selectedAgency = input.value;
+            showSelected.innerHTML = `<i class="fa fa-check"></i> 已選：${selectedAgency}`;
+            suggest.style.display = "none";
+        }
+    });
+    input.addEventListener("keydown", function(e){
+        let lis = suggest.querySelectorAll("li");
+        let idx = Array.from(lis).findIndex(li=>li.classList.contains('active'));
+        if(e.key==="ArrowDown") {
+            idx = (idx + 1) % lis.length;
+            lis.forEach(li=>li.classList.remove('active'));
+            if(lis[idx]) { lis[idx].classList.add('active'); lis[idx].scrollIntoView({block:'nearest'});}
+            e.preventDefault();
+        } else if(e.key==="ArrowUp") {
+            idx = (idx - 1 + lis.length) % lis.length;
+            lis.forEach(li=>li.classList.remove('active'));
+            if(lis[idx]) { lis[idx].classList.add('active'); lis[idx].scrollIntoView({block:'nearest'});}
+            e.preventDefault();
+        } else if(e.key==="Enter" && idx >= 0 && lis[idx]) {
+            input.value = lis[idx].textContent.trim();
+            selectedAgency = input.value;
+            showSelected.innerHTML = `<i class="fa fa-check"></i> 已選：${selectedAgency}`;
+            suggest.style.display = "none";
+            setTimeout(()=>input.blur(),10);
+            e.preventDefault();
+        }
+    });
+    input.addEventListener("change",function(){
+        let val = input.value.trim();
+        if(AGENCIES.includes(val)){
+            selectedAgency = val;
+            showSelected.innerHTML = `<i class="fa fa-check"></i> 已選：${selectedAgency}`;
+        } else if(filtered.length === 1 && filtered[0]){
+            selectedAgency = filtered[0];
+            input.value = selectedAgency;
+            showSelected.innerHTML = `<i class="fa fa-check"></i> 已選：${selectedAgency}`;
+        } else {
+            showSelected.innerHTML = "";
+        }
+    });
+
+    document.getElementById('batchStartBtnX').onclick = () => {
+        const logElm = dialog.querySelector('#batchResultLogX');
+        let agency = input.value.trim();
+        if(!agency || !AGENCIES.includes(agency)){
+            logElm.textContent = '請選擇正確經紀公司（可輸入搜尋關鍵字/或選單點選）！';
+            input.focus();
+            return;
+        }
+        showSelected.innerHTML = `<i class="fa fa-check"></i> 已選：${agency}`;
+        const linesRaw = dialog.querySelector('#batchDataX').value.trim().split('\n');
+        let originalLines = [];
+        const dataRows = linesRaw.map(line => line.trim())
+            .filter(line =>
+                line.startsWith('|') &&
+                !/^\|\s*名稱/i.test(line) &&
+                !/^\|[\s\-—－─_|]+$/.test(line) &&
+                !/^\|\s*[-—－─_]{2,}/.test(line)
+            )
+            .map((line) => {
+                originalLines.push(line);
+                return line.replace(/^[|]+|[|]+$/g, '').trim();
+            });
+
+        const parsedRows = dataRows.map(line => {
+            const sep = line.includes('|') ? '|' : '｜';
+            const arr = line.split(sep).map(s => s.replace(/[\s　]/g,'').trim());
+            const name = arr[0];
+            const priceCol = arr.find(col => /^\d+(\.\d+)?K$/i.test(col));
+            const price = priceCol ? parseFloat(priceCol.replace(/K$/i,'')) : null;
+            return { name, price };
+        }).filter(r => r.name.length > 0);
+
+        const names = parsedRows.map(r => r.name);
+        const prices = parsedRows.map(r => r.price);
+
+        if (!names.length) {
+            logElm.textContent='沒有有效名字資料！（僅處理「|」開頭行、且排除「| 名稱」及分隔線）';
+            return;
+        }
+        startBatchAdd(names, prices, agency, logElm, originalLines).then(()=>{
+            setTimeout(()=>{
+                input.value = '';
+                showSelected.innerHTML = '';
+                dialog.querySelector('#batchDataX').value = '';
+            }, 100);
+        });
+    };
+}
+
+function makeDialogDraggable(dlg, dragBar) {
+    let isDragging = false, startX, startY, startLeft, startTop;
+    dragBar.addEventListener('mousedown', function(e){
+        isDragging = true;
+        startX = e.clientX;
+        startY = e.clientY;
+        let rect = dlg.getBoundingClientRect();
+        startLeft = rect.left;
+        startTop = rect.top;
+        document.body.style.userSelect = 'none';
+    });
+    document.addEventListener('mousemove', function(e){
+        if(isDragging) {
+            let dx = e.clientX - startX;
+            let dy = e.clientY - startY;
+            dlg.style.left = (startLeft+dx) + "px";
+            dlg.style.top = (startTop+dy) + "px";
+            dlg.style.transform = "";
+        }
+    });
+    document.addEventListener('mouseup', function(){isDragging=false; document.body.style.userSelect = '';});
+}
+
+const PER_ITEM_DELAY_MS = 250;
+
+function clickToSearch(name) {
+    const searchInput = document.querySelector('input[type="search"][placeholder="輸入關鍵字搜尋"]');
+    const searchBtn = searchInput?.parentElement?.querySelector('button.btn.btn-primary');
+    if(searchInput) {
+        searchInput.value = name;
+        searchInput.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    if(searchBtn) {
+        searchBtn.dispatchEvent(new MouseEvent("click", {bubbles:true, cancelable:true}));
+    }
+}
+
+function makeNameLink(name) {
+    return `<span style="color:#1a6fcf;cursor:pointer;text-decoration:underline;" data-search-name="${name}">${name}</span>`;
+}
+
+function buildLinkedLine(origLine, name) {
+    const escapedName = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return origLine.replace(
+        new RegExp(`(\\|\\s*)(${escapedName})(\\s*\\|)`),
+        (match, p1, p2, p3) => `${p1}${makeNameLink(p2)}${p3}`
+    );
+}
+
+async function startBatchAdd(nameList, priceList, agency, logElm, originalLines) {
+    const notFound = [];
+    let succeed = 0;
+    let dupInfo = [];
+    for (let i=0; i<nameList.length; i++) {
+        const name = nameList[i];
+        const price = priceList[i];
+        logElm.textContent = `(${i+1}/${nameList.length}) 搜尋：${name} ...`;
+        const {status} = await searchAndAddOne(name, agency, price);
+        if(status === "ok") succeed++;
+        else if(status === "dup") dupInfo.push({ name, origLine: originalLines[i] });
+        else notFound.push({ name, origLine: originalLines[i] });
+        await sleep(PER_ITEM_DELAY_MS);
+    }
+
+    let html = `<div style="margin-bottom:6px;">經紀公司：<span style="color:#19ac5d;font-weight:600;">${agency}</span></div>`;
+    html += `✔️ 成功：${succeed} 筆`;
+
+    if(dupInfo.length){
+        html += `<br>❗️重複同名（未自動新增）：<br>`;
+        dupInfo.forEach((obj) => {
+            const linkedLine = buildLinkedLine(obj.origLine, obj.name);
+            html += `<div style="background:#f7f7ce;border-radius:5px;padding:2px 8px;display:inline-block;margin:2px 0;">${linkedLine}</div><br>`;
+        });
+    }
+
+    if(notFound.length){
+        html += `<br>❌ 找不到：<br>`;
+        notFound.forEach((obj) => {
+            const linkedLine = buildLinkedLine(obj.origLine, obj.name);
+            html += `<div style="background:#ffe5e5;border-radius:5px;padding:2px 8px;display:inline-block;margin:2px 0;">${linkedLine}</div><br>`;
+        });
+    }
+
+    logElm.innerHTML = html;
+
+    logElm.querySelectorAll('span[data-search-name]').forEach(el => {
+        el.addEventListener('click', () => {
+            clickToSearch(el.getAttribute('data-search-name'));
+        });
+    });
+}
+
+function searchAndAddOne(name, agency, price) {
+  return new Promise(async resolve => {
+      const input = document.querySelector('input[type="search"][placeholder="輸入關鍵字搜尋"]');
+      const searchBtn = input?.parentElement?.querySelector('button.btn.btn-primary');
+      if(!input || !searchBtn) return resolve({status:"fail"});
+      input.value = '';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(40);
+      input.value = name;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await sleep(50);
+      searchBtn.dispatchEvent(new MouseEvent("click", {bubbles:true, cancelable:true}));
+      const nameNorm = name.replace(/\s/g,'').toUpperCase();
+
+      let maxTry = 24;
+      let foundRows = [];
+      while(maxTry-- > 0) {
+          await sleep(60);
+          let rows = Array.from(document.querySelectorAll('.girls-table-wrap tbody tr'));
+          for(const tr of rows) {
+              const tds = tr.querySelectorAll('td');
+              if (tds.length < 8) continue;
+              const tname = tds[1]?.textContent.replace(/\s/g,'').trim();
+              const tnameNorm = tname ? tname.toUpperCase() : '';
+              const tformerRaw = tds[2]?.textContent || '';
+              const tformerArr = tformerRaw
+                  .split(/、|,|，|\s+/)
+                  .map(s=>s.replace(/\s/g,'').trim())
+                  .filter(x=>x)
+                  .map(x=>x.toUpperCase());
+              let companyTd = tds[tds.length-1];
+              let badges = Array.from(companyTd?.querySelectorAll('span.badge,.text-bg-primary')||[]);
+              let hasTargetAgency = badges.some(b=>b.textContent.trim()===agency);
+
+              let priceMatch = true;
+              if(price !== null) {
+                  priceMatch = false;
+                  for(const td of tds) {
+                      const cellText = td.textContent.replace(/,/g,'').trim();
+                      const cellNum = parseFloat(cellText);
+                      if(!isNaN(cellNum) && cellNum === price) {
+                          priceMatch = true;
+                          break;
+                      }
+                  }
+              }
+
+              let nameMatch = (tnameNorm === nameNorm) || tformerArr.includes(nameNorm);
+              if(nameMatch && hasTargetAgency && priceMatch) foundRows.push(tr);
+          }
+          if(foundRows.length) break;
+      }
+      if(foundRows.length > 1) return resolve({status:"dup"});
+      if(foundRows.length === 0) return resolve({status:"fail"});
+      const addBtn = foundRows[0].querySelector('td:first-child button.btn.btn-primary');
+      if(addBtn) {
+        addBtn.dispatchEvent(new MouseEvent("click", {bubbles:true, cancelable:true}));
+        await sleep(80);
+        return resolve({status:"ok"});
+      }
+      return resolve({status:"fail"});
+  });
+}
+
+const sleep = ms => new Promise(r=>setTimeout(r, ms));
+window.addEventListener('load', ()=>setTimeout(insertBatchButton, 400));
+})();
