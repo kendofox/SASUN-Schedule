@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         SASUN 批次班表1
+// @name         SASUN 批次班表
 // @namespace    http://tampermonkey.net/
 // @version      4.0
 // @description
