@@ -5,6 +5,9 @@
 // @description
 // @match        https://sasun.in/admin/schedule*
 // @grant        none
+// @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/kendofox/SASUN-Schedule/main/sasun-batch-schedule.user.js
+// @downloadURL  https://raw.githubusercontent.com/kendofox/SASUN-Schedule/main/sasun-batch-schedule.user.js
 // ==/UserScript==
 
 (function() {
