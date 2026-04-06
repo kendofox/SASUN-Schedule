@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name         SASUN 批次班表
+// @name         SASUN 批次班表1
 // @namespace    http://tampermonkey.net/
-// @version      3.9
+// @version      4.0
 // @description
 // @match        https://sasun.in/admin/schedule*
 // @grant        none
