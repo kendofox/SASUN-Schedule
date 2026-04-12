@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         SASUN 批次班表
 // @namespace    http://tampermonkey.net/
-// @version      4.1
+// @version      4.2
 // @description
 // @match        https://sasun.in/admin/schedule*
 // @grant        none
@@ -243,8 +243,10 @@ function buildLinkedLine(origLine, name) {
 
 async function startBatchAdd(nameList, priceList, agency, logElm, originalLines) {
     const notFound = [];
+    const priceDiff = [];
     let succeed = 0;
     let dupInfo = [];
+
     for (let i=0; i<nameList.length; i++) {
         const name = nameList[i];
         const price = priceList[i];
@@ -252,6 +254,7 @@ async function startBatchAdd(nameList, priceList, agency, logElm, originalLines)
         const {status} = await searchAndAddOne(name, agency, price);
         if(status === "ok") succeed++;
         else if(status === "dup") dupInfo.push({ name, origLine: originalLines[i] });
+        else if(status === "price_diff") priceDiff.push({ name, origLine: originalLines[i] });
         else notFound.push({ name, origLine: originalLines[i] });
         await sleep(PER_ITEM_DELAY_MS);
     }
@@ -264,6 +267,14 @@ async function startBatchAdd(nameList, priceList, agency, logElm, originalLines)
         dupInfo.forEach((obj) => {
             const linkedLine = buildLinkedLine(obj.origLine, obj.name);
             html += `<div style="background:#f7f7ce;border-radius:5px;padding:2px 8px;display:inline-block;margin:2px 0;">${linkedLine}</div><br>`;
+        });
+    }
+
+    if(priceDiff.length){
+        html += `<br>⚠️ 人氣不同（未自動新增）：<br>`;
+        priceDiff.forEach((obj) => {
+            const linkedLine = buildLinkedLine(obj.origLine, obj.name);
+            html += `<div style="background:#ffe8cc;border-radius:5px;padding:2px 8px;display:inline-block;margin:2px 0;">${linkedLine}</div><br>`;
         });
     }
 
@@ -299,9 +310,13 @@ function searchAndAddOne(name, agency, price) {
       const nameNorm = name.replace(/\s/g,'').toUpperCase();
 
       let maxTry = 24;
-      let foundRows = [];
+      let nameMatchRows = [];  // 名字+公司符合的所有行
+      let fullMatchRows = [];  // 名字+公司+金額都符合的行
+
       while(maxTry-- > 0) {
           await sleep(60);
+          nameMatchRows = [];
+          fullMatchRows = [];
           let rows = Array.from(document.querySelectorAll('.girls-table-wrap tbody tr'));
           for(const tr of rows) {
               const tds = tr.querySelectorAll('td');
@@ -317,32 +332,45 @@ function searchAndAddOne(name, agency, price) {
               let companyTd = tds[tds.length-1];
               let badges = Array.from(companyTd?.querySelectorAll('span.badge,.text-bg-primary')||[]);
               let hasTargetAgency = badges.some(b=>b.textContent.trim()===agency);
+              let nameMatch = (tnameNorm === nameNorm) || tformerArr.includes(nameNorm);
 
-              let priceMatch = true;
-              if(price !== null) {
-                  priceMatch = false;
-                  for(const td of tds) {
-                      const cellText = td.textContent.replace(/,/g,'').trim();
-                      const cellNum = parseFloat(cellText);
-                      if(!isNaN(cellNum) && cellNum === price) {
-                          priceMatch = true;
-                          break;
+              if(nameMatch && hasTargetAgency) {
+                  nameMatchRows.push(tr);
+
+                  // 再檢查金額
+                  let priceMatch = true;
+                  if(price !== null) {
+                      priceMatch = false;
+                      for(const td of tds) {
+                          const cellText = td.textContent.replace(/,/g,'').trim();
+                          const cellNum = parseFloat(cellText);
+                          if(!isNaN(cellNum) && cellNum === price) {
+                              priceMatch = true;
+                              break;
+                          }
                       }
                   }
+                  if(priceMatch) fullMatchRows.push(tr);
               }
-
-              let nameMatch = (tnameNorm === nameNorm) || tformerArr.includes(nameNorm);
-              if(nameMatch && hasTargetAgency && priceMatch) foundRows.push(tr);
           }
-          if(foundRows.length) break;
+          if(nameMatchRows.length) break;
       }
-      if(foundRows.length > 1) return resolve({status:"dup"});
-      if(foundRows.length === 0) return resolve({status:"fail"});
-      const addBtn = foundRows[0].querySelector('td:first-child button.btn.btn-primary');
+
+      // 完全找不到名字+公司符合的
+      if(nameMatchRows.length === 0) return resolve({status:"fail"});
+
+      // 找到名字+公司，但金額不符
+      if(fullMatchRows.length === 0) return resolve({status:"price_diff"});
+
+      // 金額符合但超過一筆（同名同金額）
+      if(fullMatchRows.length > 1) return resolve({status:"dup"});
+
+      // 唯一符合，自動新增
+      const addBtn = fullMatchRows[0].querySelector('td:first-child button.btn.btn-primary');
       if(addBtn) {
-        addBtn.dispatchEvent(new MouseEvent("click", {bubbles:true, cancelable:true}));
-        await sleep(80);
-        return resolve({status:"ok"});
+          addBtn.dispatchEvent(new MouseEvent("click", {bubbles:true, cancelable:true}));
+          await sleep(80);
+          return resolve({status:"ok"});
       }
       return resolve({status:"fail"});
   });
